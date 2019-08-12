@@ -6,7 +6,6 @@
 
 #[macro_use]
 extern crate log;
-extern crate env_logger;
 
 #[macro_use]
 extern crate serde_derive;
@@ -23,5 +22,5 @@ use std::time::Duration;
 mod sensel;
 use sensel::*;
 
-mod device;
-use device::*;
+pub mod device;
+pub use device::*;

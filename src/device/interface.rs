@@ -19,6 +19,8 @@ use std::{thread, time};
 
 use rosc::{OscPacket, OscMessage, OscType};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::sensel;
 
 use std::io::stdin;
@@ -60,25 +62,17 @@ impl Interface {
     }
 
     /// Process Morph data, returns only on exit
-    pub fn run(mut self, hetz: u32, transport: Sender<OscPacket>) {
+    pub fn run(mut self, hetz: u32, transport: Sender<OscPacket>, disconnect: &AtomicBool) {
         //let d: Box<Device> = Box::new(self.device._get_device());
 
         self.device.set_frame_content(sensel::frame::Mask::CONTACTS).unwrap();
 
         let scan = self.device.start_scanning().unwrap();
 
-        println!("Press Enter to exit driver");
-        let (sender, receiver) = channel();
-        spawn(move || {
-            let mut input = String::new();
-            stdin().read_line(&mut input).unwrap();
-            sender.send(()).unwrap();
-        });
-
         // target duration of a single, i.e. run at the speed specified by caller
         let frame_duration_ms = time::Duration::from_millis((1000.0 / hetz as f32) as u64);
 
-        while receiver.try_recv().is_err() {
+        while !disconnect.load(Ordering::SeqCst) {
             // read current time
             let now = time::Instant::now();
 
