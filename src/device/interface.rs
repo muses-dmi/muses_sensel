@@ -105,15 +105,15 @@ impl Interface {
                                 Ok(_) => {},
                                 Err(s) => error!("{}", s)
                             };
-                            // match contact.state {
-                            //     sensel::contact::State::CONTACT_START => {
-                            //         scan.device().set_led_brightness(contact.id, 100).unwrap();
-                            //     },
-                            //     sensel::contact::State::CONTACT_END => {
-                            //         scan.device().set_led_brightness(contact.id, 0).unwrap();
-                            //     },
-                            //     _ => {}
-                            // };
+                            match contact.state {
+                                sensel::contact::State::CONTACT_START => {
+                                    //scan.device().set_led_brightness(contact.id, 100).unwrap();
+                                },
+                                sensel::contact::State::CONTACT_END => {
+                                    //scan.device().set_led_brightness(contact.id, 0).unwrap();
+                                },
+                                _ => {}
+                            };
                         }
                         else {
                             transport.send(OscPacket::Message(OscMessage {
@@ -144,6 +144,10 @@ struct Control {
     pub args: Vec<ArgType>,
     pub id: usize,
     pub rgb:  Option<String>,
+    pub pressure: Option<bool>,
+    pub generate_move: Option<bool>,
+    pub generate_end: Option<bool>,
+    pub generate_coords: Option<bool>,
     pub type_id: String,
     pub min: Option<ArgType>,
     pub max: Option<ArgType>,
@@ -234,7 +238,19 @@ impl InterfaceBuilder {
 
                             for ctl in cs {
                                 if ctl.type_id == TYPE_PAD {
-                                    let pad = Box::new(Pad::new(ctl.address, ctl.args));
+                                    let pressure = ctl.pressure.map_or(false, |_| true);
+                                    let generate_move = ctl.generate_move.map_or(false, |_| true);
+                                    let generate_end = ctl.generate_end.map_or(false, |_| true);
+                                    let generate_coords = ctl.generate_coords.map_or(false, |_| true);
+                                    
+                                    let pad = Box::new(
+                                        Pad::new(
+                                            ctl.address, 
+                                            ctl.args, 
+                                            pressure, 
+                                            generate_move, 
+                                            generate_end,
+                                            generate_coords));
                                     info!("adding pad = {}", ctl.id);
                                     controls.push(pad);
                                 }

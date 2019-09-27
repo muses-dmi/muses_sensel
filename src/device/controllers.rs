@@ -7,10 +7,12 @@
 use std::sync::mpsc::{Sender};
 use std::str::FromStr;
 use std::convert::From;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use rosc::{OscPacket, OscMessage, OscType};
 use rosc::encoder;
 use std::cmp;
+
+
 
 extern crate num;
 
@@ -57,6 +59,9 @@ pub trait Controller {
 
 //-----------------------------------------------------------------------------
 
+const TOUCH_START: i32 = 0;
+const TOUCH_MOVE: i32  = 1;
+const TOUCH_END: i32   = 2;
 
 /// Pad controller
 #[derive(Debug, Clone)]
@@ -65,13 +70,29 @@ pub struct Pad {
     address: String,
     /// static OSC message arguments
     args: Vec<OscType>,
+    pressure: bool,
+    generate_move: bool,
+    generate_end: bool,
+    generate_coords: bool,
+    previous_time: Instant,
 }
 
 impl Pad {
-    pub fn new(address: String, args: Vec<ArgType>) -> Self {
+    pub fn new(
+            address: String, 
+            args: Vec<ArgType>, 
+            pressure: bool, 
+            generate_move: bool,
+            generate_end: bool,
+            generate_coords: bool) -> Self {
         Pad {
             address: address,
             args: args.into_iter().map(|a| OscType::from(a)).collect(),
+            pressure: pressure,
+            generate_coords: generate_coords,
+            generate_move: generate_move,
+            generate_end: generate_end,
+            previous_time: Instant::now(),
         }
     }
     //
@@ -88,18 +109,126 @@ impl Controller for Pad {
              transport: &Sender<OscPacket>)
                 -> Result<(), &'static str> {
         
-         match contact.state {
-            contact::State::CONTACT_START => {
-                let packet = OscPacket::Message(OscMessage {
-                    addr: self.address.clone(),
-                    args: Some(self.args.clone()),
-                });
-                transport.send(packet).unwrap();
-                Ok(())
-            },
-            // all other states are ignored
-            _ => Ok(())
+        //println!("{}", contact.total_force);
+        if contact.total_force <= 20.0 {
+            return Ok(());
         }
+
+        if self.previous_time.elapsed() > Duration::from_millis(20) {
+            match contact.state {
+                contact::State::CONTACT_START => {
+                    let args = 
+                        if self.pressure && self.generate_coords {
+                            let mut a = vec![OscType::Int(TOUCH_START),
+                                            OscType::Float(contact.total_force), 
+                                            OscType::Float(contact.x),
+                                            OscType::Float(contact.x)];
+                            a.extend(self.args.iter().cloned());
+                            a
+                        }
+                        else if self.generate_coords {
+                            let mut a = vec![
+                                OscType::Int(TOUCH_START), 
+                                OscType::Float(contact.x), 
+                                OscType::Float(contact.y)];
+                            a.extend(self.args.iter().cloned());
+                            a
+                        }
+                        else if self.pressure {
+                            let mut a = vec![OscType::Int(TOUCH_START), OscType::Float(contact.total_force)];
+                            a.extend(self.args.iter().cloned());
+                            a
+                        }
+                        else {
+                            let mut a = vec![OscType::Int(TOUCH_START)];
+                            a.extend(self.args.clone());
+                            a
+                        };
+
+                    let packet = OscPacket::Message(OscMessage {
+                        addr: self.address.clone(),
+                        args: Some(args),
+                    });
+                    transport.send(packet).unwrap();
+
+                    self.previous_time = Instant::now();
+                },
+                contact::State::CONTACT_MOVE => {
+                    if self.generate_move {
+                        let args = 
+                            if self.pressure && self.generate_coords {
+                                let mut a = vec![OscType::Int(TOUCH_MOVE),
+                                                OscType::Float(contact.total_force), 
+                                                OscType::Float(contact.x),
+                                                OscType::Float(contact.x)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else if self.generate_coords {
+                                let mut a = vec![
+                                    OscType::Int(TOUCH_MOVE), 
+                                    OscType::Float(contact.x), 
+                                    OscType::Float(contact.y)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else if self.pressure {
+                                let mut a = vec![OscType::Int(TOUCH_MOVE), OscType::Float(contact.total_force)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else {
+                                let mut a = vec![OscType::Int(TOUCH_MOVE)];
+                                a.extend(self.args.clone());
+                                a
+                            };
+
+                        let packet = OscPacket::Message(OscMessage {
+                            addr: self.address.clone(),
+                            args: Some(args),
+                        });
+                        transport.send(packet).unwrap();
+                    }
+                },
+                contact::State::CONTACT_END => {
+                    self.previous_time = Instant::now();
+                        // add if generate end
+                        let args = 
+                            if self.pressure && self.generate_coords {
+                                let mut a = vec![OscType::Int(TOUCH_END),
+                                                OscType::Float(contact.total_force), 
+                                                OscType::Float(contact.x),
+                                                OscType::Float(contact.x)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else if self.generate_coords {
+                                let mut a = vec![OscType::Int(TOUCH_END), OscType::Float(contact.x), OscType::Float(contact.y)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else if self.pressure {
+                                let mut a = vec![OscType::Int(TOUCH_END), OscType::Float(contact.total_force)];
+                                a.extend(self.args.iter().cloned());
+                                a
+                            }
+                            else {
+                                let mut a = vec![OscType::Int(TOUCH_END)];
+                                a.extend(self.args.clone());
+                                a
+                            };
+
+                        let packet = OscPacket::Message(OscMessage {
+                            addr: self.address.clone(),
+                            args: Some(args),
+                        });
+                        transport.send(packet).unwrap();
+                },
+                // all other states are ignored
+                _ => { }
+            }
+        }
+        return Ok(());
     }
 }
 
