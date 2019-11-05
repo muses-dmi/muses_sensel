@@ -4,6 +4,8 @@
 //! Copyright © 2019 Benedict Gaster. All rights reserved.
 //! 
 
+use std::net::{SocketAddrV4};
+
 use super::controllers::*;
 
 use std::fs;
@@ -33,6 +35,7 @@ use crate::sensel::device::Device;
 // constants
 
 const TYPE_PAD : &'static str = "pad";
+const TYPE_DPAD : &'static str = "dpad";
 const TYPE_HSLIDER : &'static str = "horz_slider";
 const TYPE_VSLIDER : &'static str = "vert_slider"; 
 const TYPE_ENDLESS : &'static str = "endless";
@@ -62,7 +65,7 @@ impl Interface {
     }
 
     /// Process Morph data, returns only on exit
-    pub fn run(mut self, hetz: u32, transport: Sender<OscPacket>, disconnect: &AtomicBool) {
+    pub fn run(mut self, hetz: u32, transport: Sender<(OscPacket, Option<SocketAddrV4>)>, disconnect: &AtomicBool) {
         //let d: Box<Device> = Box::new(self.device._get_device());
 
         self.device.set_frame_content(sensel::frame::Mask::CONTACTS).unwrap();
@@ -99,7 +102,7 @@ impl Interface {
                                 self.controls[self.buffer[contact.x as usize][contact.y as usize] as usize - 1].name(),
                                 contact.x, contact.y);
 
-                            match self.controls[self.buffer[contact.x as usize][contact.y as usize] as usize - 1].touch(
+                            match self.controls[self.buffer[contact.x as usize][contact.y as usize] as usize - 1].touch_start(
                                 &contact,
                                 &transport) {
                                 Ok(_) => {},
@@ -116,10 +119,10 @@ impl Interface {
                             };
                         }
                         else {
-                            transport.send(OscPacket::Message(OscMessage {
+                            transport.send((OscPacket::Message(OscMessage {
                                         addr: "/not/a/msg".to_string(),
                                         args: None,
-                                })).unwrap();   
+                                }), None)).unwrap();   
                         }
 
                         // wait for any remaining time before processsing next frame
@@ -149,6 +152,8 @@ struct Control {
     pub generate_end: Option<bool>,
     pub generate_coords: Option<bool>,
     pub type_id: String,
+    pub on: Option<ArgType>,
+    pub off: Option<ArgType>,
     pub min: Option<ArgType>,
     pub max: Option<ArgType>,
     pub initial: Option<ArgType>, 
@@ -227,7 +232,8 @@ impl InterfaceBuilder {
                             let mut cs: Vec<Control> = vec![];
                             for c in controllers {
                                 // TODO: add check for Error and return an error is so
-                                let ctl: Control = serde_json::from_value(c.clone()).expect("unxpected format error with controller");
+                                let ctl: Control = serde_json::from_value(c.clone()).expect(
+                                                                        "unxpected format error with controller");
                                 cs.push(ctl.clone());
                             }
                             cs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -252,6 +258,19 @@ impl InterfaceBuilder {
                                             generate_end,
                                             generate_coords));
                                     info!("adding pad = {}", ctl.id);
+                                    controls.push(pad);
+                                }
+                                else if ctl.type_id == TYPE_DPAD {
+                                    let on = ctl.on.map_or(ArgType::IType(0), |x| x);
+                                    let off = ctl.off.map_or(ArgType::IType(0), |x| x);
+                                    
+                                    let pad = Box::new(
+                                        DPad::new(
+                                            ctl.address, 
+                                            on,
+                                            off,
+                                            ctl.args));
+                                    info!("adding dpad = {}", ctl.id);
                                     controls.push(pad);
                                 }
                                 else if ctl.type_id == TYPE_VSLIDER { 

@@ -4,6 +4,7 @@
 //! Copyright © 2019 Benedict Gaster. All rights reserved.
 //! 
 
+use std::net::{SocketAddrV4};
 use std::sync::mpsc::{Sender};
 use std::str::FromStr;
 use std::convert::From;
@@ -11,8 +12,6 @@ use std::time::{Duration, Instant};
 use rosc::{OscPacket, OscMessage, OscType};
 use rosc::encoder;
 use std::cmp;
-
-
 
 extern crate num;
 
@@ -51,10 +50,20 @@ pub trait Controller {
 
     /// process a touch event, outputs OSC
     /// messages to transport layer
-    fn touch(&mut self, 
+    fn touch_start(&mut self, 
             contact: &contact::Contact, 
-            transport: &Sender<OscPacket>)
+            transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
                 -> Result<(), &'static str>;
+
+    fn touch_move(&mut self, 
+            contact: &contact::Contact, 
+            transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
+                -> bool;
+
+    fn touch_end(&mut self, 
+            contact: &contact::Contact, 
+            transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
+                -> bool;
 }
 
 //-----------------------------------------------------------------------------
@@ -62,6 +71,102 @@ pub trait Controller {
 const TOUCH_START: i32 = 0;
 const TOUCH_MOVE: i32  = 1;
 const TOUCH_END: i32   = 2;
+
+/// DPad controller
+///  This is similar to a start Pad, but only generates on/off messages, whose values 
+/// are provided on creation
+#[derive(Debug, Clone)]
+pub struct DPad {
+    /// OSC address
+    address: String,
+    /// static OSC message arguments
+    args_on: Vec<OscType>,
+    args_off: Vec<OscType>,
+    previous_time: Instant,
+}
+
+impl DPad {
+    pub fn new(
+            address: String,
+            on: ArgType,
+            off: ArgType, 
+            args: Vec<ArgType>) -> Self {
+
+        let mut args_on: Vec<OscType> = args.clone().into_iter().map(|a| OscType::from(a)).collect();
+        args_on.push(OscType::from(on));
+
+        let mut args_off: Vec<OscType> = args.into_iter().map(|a| OscType::from(a)).collect();
+        args_off.push(OscType::from(off));
+
+        DPad {
+            address: address,
+            args_on: args_on, 
+            args_off: args_off, 
+            previous_time: Instant::now(),
+        }
+    }
+    //
+}
+
+impl Controller for DPad {
+    fn name(&self) -> &'static str {
+        "dpad"
+    }
+
+    /// generate OSC message on start contact
+    fn touch_start(&mut self, 
+             contact: &contact::Contact, 
+             transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
+                -> Result<(), &'static str> {
+       
+        //println!("{} {}", contact.total_force, module_path!());
+        // if contact.total_force <= 20.0 {
+        //     return Ok(());
+        // }
+
+        if self.previous_time.elapsed() > Duration::from_millis(20) {
+
+            let packet = OscPacket::Message(OscMessage {
+                addr: self.address.clone(),
+                args: Some(self.args_on.clone()),
+            });
+            info!("{:?}", packet);
+            let saddr = SocketAddrV4::from_str("127.0.0.1:4000").unwrap();
+            //transport.send((packet, None)).unwrap();
+            transport.send((packet, Some(saddr))).unwrap();
+
+            self.previous_time = Instant::now();
+        }
+
+        return Ok(());
+    }
+
+    fn touch_move(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
+    }
+
+    fn touch_end(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+            self.previous_time = Instant::now();
+
+            let packet = OscPacket::Message(OscMessage {
+                addr: self.address.clone(),
+                args: Some(self.args_off.clone()),
+            });
+            info!("{:?}", packet);
+            let saddr = SocketAddrV4::from_str("127.0.0.1:4000").unwrap();
+            //transport.send((packet, None)).unwrap();
+            transport.send((packet, Some(saddr))).unwrap();
+
+        return true;
+    }
+}
+
 
 /// Pad controller
 #[derive(Debug, Clone)]
@@ -104,12 +209,12 @@ impl Controller for Pad {
     }
 
     /// generate OSC message on start contact
-    fn touch(&mut self, 
+    fn touch_start(&mut self, 
              contact: &contact::Contact, 
-             transport: &Sender<OscPacket>)
+             transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
                 -> Result<(), &'static str> {
-        
-        //println!("{}", contact.total_force);
+       
+        //println!("{} {}", contact.total_force, module_path!());
         if contact.total_force <= 20.0 {
             return Ok(());
         }
@@ -117,6 +222,7 @@ impl Controller for Pad {
         if self.previous_time.elapsed() > Duration::from_millis(20) {
             match contact.state {
                 contact::State::CONTACT_START => {
+                    
                     let args = 
                         if self.pressure && self.generate_coords {
                             let mut a = vec![OscType::Int(TOUCH_START),
@@ -145,11 +251,14 @@ impl Controller for Pad {
                             a
                         };
 
+                        
+
                     let packet = OscPacket::Message(OscMessage {
                         addr: self.address.clone(),
                         args: Some(args),
                     });
-                    transport.send(packet).unwrap();
+                    info!("{:?}", packet);
+                    transport.send((packet, None)).unwrap();
 
                     self.previous_time = Instant::now();
                 },
@@ -187,7 +296,7 @@ impl Controller for Pad {
                             addr: self.address.clone(),
                             args: Some(args),
                         });
-                        transport.send(packet).unwrap();
+                        transport.send((packet, None)).unwrap();
                     }
                 },
                 contact::State::CONTACT_END => {
@@ -222,13 +331,27 @@ impl Controller for Pad {
                             addr: self.address.clone(),
                             args: Some(args),
                         });
-                        transport.send(packet).unwrap();
+                        transport.send((packet, None)).unwrap();
                 },
                 // all other states are ignored
                 _ => { }
             }
         }
         return Ok(());
+    }
+
+    fn touch_move(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
+    }
+
+    fn touch_end(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
     }
 }
 
@@ -272,9 +395,9 @@ impl Controller for VSlider {
         "vslider"
     }
 
-    fn touch(&mut self, 
+    fn touch_start(&mut self, 
              contact: &contact::Contact, 
-             transport: &Sender<OscPacket>)
+             transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
                 -> Result<(), &'static str> {
 
         match contact.state {
@@ -307,7 +430,7 @@ impl Controller for VSlider {
                         addr: self.address.clone(),
                         args: Some(args),
                     });
-                    transport.send(packet).unwrap();
+                    transport.send((packet, None)).unwrap();
                 }
                 
                 Ok(())    
@@ -316,6 +439,20 @@ impl Controller for VSlider {
                 Ok(())
             }
         }
+    }
+
+    fn touch_move(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
+    }
+
+    fn touch_end(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
     }
 }
 
@@ -359,9 +496,9 @@ impl Controller for HSlider {
         "hslider"
     }
 
-    fn touch(&mut self, 
+    fn touch_start(&mut self, 
              contact: &contact::Contact, 
-             transport: &Sender<OscPacket>)
+             transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
                 -> Result<(), &'static str> {
                match contact.state {
             contact::State::CONTACT_START => {
@@ -393,7 +530,7 @@ impl Controller for HSlider {
                         addr: self.address.clone(),
                         args: Some(args),
                     });
-                    transport.send(packet).unwrap();
+                    transport.send((packet, None)).unwrap();
                 }
                 
                 Ok(())    
@@ -402,6 +539,20 @@ impl Controller for HSlider {
                 Ok(())
             }
         }
+    }
+
+    fn touch_move(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
+    }
+
+    fn touch_end(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
     }
 }
 
@@ -427,10 +578,24 @@ impl Controller for Endless {
         "endless"
     }
 
-    fn touch(&mut self, 
+    fn touch_start(&mut self, 
              contact: &contact::Contact, 
-             transport: &Sender<OscPacket>)
+             transport: &Sender<(OscPacket, Option<SocketAddrV4>)>)
                 -> Result<(), &'static str> {
         Ok(())
+    }
+
+    fn touch_move(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
+    }
+
+    fn touch_end(&mut self, 
+        contact: &contact::Contact, 
+        transport: &Sender<(OscPacket, Option<SocketAddrV4>)>) -> bool {
+
+        return true;
     }
 }

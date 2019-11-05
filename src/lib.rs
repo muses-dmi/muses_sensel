@@ -19,8 +19,8 @@ use std::net::{UdpSocket, SocketAddrV4};
 use std::str::FromStr;
 use std::time::Duration;
 
-mod sensel;
-use sensel::*;
+pub mod sensel;
+pub use sensel::*;
 
 pub mod device;
 pub use device::*;
